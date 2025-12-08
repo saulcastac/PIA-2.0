@@ -8,7 +8,7 @@ import {
 } from '../services/calendarService.js';
 import { config } from '../config/config.js';
 import { parse, format, addDays, isToday, isTomorrow } from 'date-fns';
-import { es } from 'date-fns/locale/es/index.js';
+import es from 'date-fns/locale/es/index.js';
 
 /**
  * Procesa un mensaje entrante de WhatsApp
