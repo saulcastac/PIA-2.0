@@ -1,9 +1,24 @@
 import OpenAI from 'openai';
 import { config } from '../config/config.js';
 
-const openai = new OpenAI({
-  apiKey: config.openai.apiKey,
-});
+// Inicializar cliente de OpenAI de forma lazy
+let openai = null;
+
+function getOpenAIClient() {
+  if (!openai) {
+    const apiKey = config.openai.apiKey || process.env.OPENAI_API_KEY;
+    
+    if (!apiKey) {
+      throw new Error('OPENAI_API_KEY no está configurada. Por favor, configura la variable de entorno OPENAI_API_KEY.');
+    }
+    
+    openai = new OpenAI({
+      apiKey: apiKey,
+    });
+  }
+  
+  return openai;
+}
 
 /**
  * Procesa un mensaje del usuario usando ChatGPT para entender la intención
@@ -57,7 +72,8 @@ IMPORTANTE:
 - Si no entiendes algo, pregunta amablemente`;
 
   try {
-    const completion = await openai.chat.completions.create({
+    const client = getOpenAIClient();
+    const completion = await client.chat.completions.create({
       model: config.openai.model,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -97,7 +113,8 @@ export async function generateResponse(intent, data, context = {}) {
 Genera una respuesta amigable y profesional en español para el usuario.`;
 
   try {
-    const completion = await openai.chat.completions.create({
+    const client = getOpenAIClient();
+    const completion = await client.chat.completions.create({
       model: config.openai.model,
       messages: [
         {
