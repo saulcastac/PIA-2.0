@@ -9,6 +9,13 @@ import {
 import { config } from '../config/config.js';
 import { parse, format, addDays, isToday, isTomorrow } from 'date-fns';
 import es from 'date-fns/locale/es/index.js';
+import {
+  getConversation,
+  updateConversationData,
+  addMessageToHistory,
+  getMessageHistory,
+  getConversationData,
+} from '../utils/conversationMemory.js';
 
 /**
  * Procesa un mensaje entrante de WhatsApp
@@ -20,11 +27,35 @@ export async function handleIncomingMessage(from, messageBody) {
   try {
     console.log(`Mensaje recibido de ${from}: ${messageBody}`);
 
+    // Obtener o crear conversación
+    const conversation = getConversation(from);
+    
+    // Agregar mensaje del usuario al historial
+    addMessageToHistory(from, 'user', messageBody);
+
+    // Obtener datos previos y historial de la conversación
+    const previousData = getConversationData(from);
+    const messageHistory = getMessageHistory(from);
+
     // Obtener contexto adicional (canchas disponibles, etc.)
     const context = await buildContext();
 
-    // Procesar mensaje con IA
-    const aiResponse = await processMessageWithAI(messageBody, context);
+    // Procesar mensaje con IA (incluyendo historial y datos previos)
+    const aiResponse = await processMessageWithAI(
+      messageBody,
+      context,
+      messageHistory,
+      previousData
+    );
+    
+    // Fusionar datos nuevos con los previos
+    const mergedData = {
+      ...previousData,
+      ...aiResponse.datos,
+    };
+    
+    // Actualizar datos de la conversación
+    updateConversationData(from, mergedData);
 
     // Procesar según la intención
     let responseMessage = aiResponse.mensaje_respuesta;
@@ -52,6 +83,9 @@ export async function handleIncomingMessage(from, messageBody) {
         break;
     }
 
+    // Agregar respuesta del asistente al historial
+    addMessageToHistory(from, 'assistant', responseMessage);
+    
     // Enviar respuesta
     await sendWhatsAppMessage(formatPhoneNumber(from), responseMessage);
   } catch (error) {
@@ -85,6 +119,47 @@ async function buildContext() {
 }
 
 /**
+ * Mapea un nombre de cancha a su ID correspondiente
+ * @param {string} canchaNameOrId - Nombre o ID de la cancha
+ * @returns {string} - ID de la cancha
+ */
+function mapCanchaNameToId(canchaNameOrId) {
+  if (!canchaNameOrId) {
+    return Object.keys(config.canchas)[0];
+  }
+  
+  // Si ya es un ID válido, retornarlo
+  if (config.canchas[canchaNameOrId]) {
+    return canchaNameOrId;
+  }
+  
+  // Mapeo de nombres comunes a IDs
+  const nameMap = {
+    'monex': 'cancha_1',
+    'gocsa': 'cancha_2',
+    'teds': 'cancha_3',
+    'woodward': 'cancha_4',
+  };
+  
+  const normalizedName = canchaNameOrId.toLowerCase().trim();
+  
+  // Buscar por nombre en el mapa
+  if (nameMap[normalizedName]) {
+    return nameMap[normalizedName];
+  }
+  
+  // Buscar por nombre en las canchas configuradas
+  for (const [id, cancha] of Object.entries(config.canchas)) {
+    if (cancha.nombre.toLowerCase() === normalizedName) {
+      return id;
+    }
+  }
+  
+  // Si no se encuentra, retornar la primera cancha por defecto
+  return Object.keys(config.canchas)[0];
+}
+
+/**
  * Maneja la intención de reservar
  * @param {string} from - Número de teléfono del cliente
  * @param {Object} datos - Datos extraídos de la reserva
@@ -113,7 +188,9 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
 
   // Validar y procesar la reserva
   try {
-    const canchaId = datos.cancha || Object.keys(config.canchas)[0];
+    // Mapear nombre de cancha a ID si es necesario
+    let canchaId = datos.cancha || Object.keys(config.canchas)[0];
+    canchaId = mapCanchaNameToId(canchaId);
     const fecha = parseDate(datos.fecha);
     const hora = parseTime(datos.hora);
     const duracion = datos.duracion || config.establecimiento.duracionDefault;
@@ -143,6 +220,9 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
     const cancha = config.canchas[canchaId];
     const fechaFormateada = format(startTime, "EEEE, d 'de' MMMM 'de' yyyy", { locale: es });
     const horaFormateada = format(startTime, 'HH:mm');
+
+    // Marcar reserva como completada y limpiar datos de la conversación
+    updateConversationData(from, { reserva_completada: true });
 
     return `✅ ¡Reserva confirmada!\n\n` +
            `📅 Fecha: ${fechaFormateada}\n` +

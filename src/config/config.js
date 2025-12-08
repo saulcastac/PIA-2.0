@@ -37,9 +37,13 @@ function getCanchasConfig() {
   let index = 1;
   
   while (process.env[`CANCHA_${index}_CALENDAR_ID`]) {
+    // Permitir nombres personalizados mediante CANCHA_X_NOMBRE
+    const nombrePersonalizado = process.env[`CANCHA_${index}_NOMBRE`];
+    const nombre = nombrePersonalizado || `Cancha ${index}`;
+    
     canchas[`cancha_${index}`] = {
       id: `cancha_${index}`,
-      nombre: `Cancha ${index}`,
+      nombre: nombre,
       calendarId: process.env[`CANCHA_${index}_CALENDAR_ID`],
     };
     index++;
@@ -47,9 +51,10 @@ function getCanchasConfig() {
   
   // Si no hay canchas configuradas, crear una por defecto
   if (Object.keys(canchas).length === 0) {
+    const nombrePersonalizado = process.env.CANCHA_1_NOMBRE;
     canchas.cancha_1 = {
       id: 'cancha_1',
-      nombre: 'Cancha 1',
+      nombre: nombrePersonalizado || 'Cancha 1',
       calendarId: process.env.CANCHA_1_CALENDAR_ID || '',
     };
   }
