@@ -1,7 +1,23 @@
 import twilio from 'twilio';
 import { config } from '../config/config.js';
 
-const client = twilio(config.twilio.accountSid, config.twilio.authToken);
+// Inicializar cliente de Twilio de forma lazy
+let client = null;
+
+function getTwilioClient() {
+  if (!client) {
+    const accountSid = config.twilio.accountSid || process.env.TWILIO_ACCOUNT_SID;
+    const authToken = config.twilio.authToken || process.env.TWILIO_AUTH_TOKEN;
+    
+    if (!accountSid || !authToken) {
+      throw new Error('TWILIO_ACCOUNT_SID y TWILIO_AUTH_TOKEN son requeridos. Por favor, configura estas variables de entorno.');
+    }
+    
+    client = twilio(accountSid, authToken);
+  }
+  
+  return client;
+}
 
 /**
  * Envía un mensaje de WhatsApp a través de Twilio
@@ -11,7 +27,8 @@ const client = twilio(config.twilio.accountSid, config.twilio.authToken);
  */
 export async function sendWhatsAppMessage(to, message) {
   try {
-    const response = await client.messages.create({
+    const twilioClient = getTwilioClient();
+    const response = await twilioClient.messages.create({
       from: config.twilio.whatsappNumber,
       to: to,
       body: message,
