@@ -209,22 +209,15 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
     const hours = hora.getHours();
     const minutes = hora.getMinutes();
     
-    // Crear fecha en la zona horaria local del servidor primero
-    // Luego usamos zonedTimeToUtc para interpretarla como si fuera en GMT-6
-    const localDate = new Date(year, month, day, hours, minutes, 0, 0);
-    
-    // zonedTimeToUtc interpreta la fecha como si estuviera en la zona horaria especificada
-    // y la convierte a UTC. El problema es que localDate está en la zona horaria del servidor.
-    // Necesitamos ajustar esto manualmente calculando la diferencia.
-    
-    // Solución: crear la fecha como string ISO con el offset de GMT-6
-    // GMT-6 es UTC-6, así que el offset es -06:00
+    // Crear string ISO con la fecha y hora, especificando el offset de GMT-6
+    // GMT-6 = UTC-6, así que el offset es -06:00
+    // Formato: YYYY-MM-DDTHH:mm:ss-06:00
     const dateTimeString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00-06:00`;
-    const dateInTimezone = new Date(dateTimeString);
     
-    // Ahora convertimos a UTC (aunque dateInTimezone ya está en UTC internamente)
-    // Pero para ser consistentes con el resto del código, usamos zonedTimeToUtc
-    const startTime = zonedTimeToUtc(dateInTimezone, timezone);
+    // Crear Date object - JavaScript automáticamente convierte a UTC
+    // Ejemplo: "2025-12-09T10:00:00-06:00" se convierte a "2025-12-09T16:00:00Z" (UTC)
+    // Esto es correcto: 10 AM GMT-6 = 4 PM UTC
+    const startTime = new Date(dateTimeString);
 
     // Verificar disponibilidad
     const availability = await checkAvailability(canchaId, startTime, duracion);
@@ -245,7 +238,7 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
 
     const cancha = config.canchas[canchaId];
     const timezoneDisplay = config.server.timezone || 'America/Mexico_City';
-    // Convertir de vuelta a la zona horaria local para mostrar
+    // startTime está en UTC, convertir de vuelta a GMT-6 para mostrar
     const startTimeLocalDisplay = utcToZonedTime(startTime, timezoneDisplay);
     const fechaFormateada = format(startTimeLocalDisplay, "EEEE, d 'de' MMMM 'de' yyyy", { locale: es });
     const horaFormateada = format(startTimeLocalDisplay, 'HH:mm');

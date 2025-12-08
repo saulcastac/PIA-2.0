@@ -153,10 +153,10 @@ export async function createReservation(canchaId, startTime, durationMinutes, cl
 
   const endTime = addMinutes(startTime, durationMinutes);
 
-  // Convertir a UTC para Google Calendar (que espera fechas en UTC)
-  const timezone = config.server.timezone || 'America/Mexico_City';
-  const startTimeUTC = zonedTimeToUtc(startTime, timezone);
-  const endTimeUTC = zonedTimeToUtc(endTime, timezone);
+  // startTime ya está en UTC (fue convertido en messageController)
+  // Solo necesitamos asegurarnos de que endTime también esté en UTC
+  const startTimeUTC = startTime;
+  const endTimeUTC = endTime;
 
   const event = {
     summary: `Reserva Padel - ${clienteNombre}`,
