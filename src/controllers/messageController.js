@@ -8,6 +8,7 @@ import {
 } from '../services/calendarService.js';
 import { config } from '../config/config.js';
 import { parse, format, addDays, isToday, isTomorrow } from 'date-fns';
+import { utcToZonedTime, zonedTimeToUtc, formatInTimeZone } from 'date-fns-tz';
 import es from 'date-fns/locale/es/index.js';
 import {
   getConversation,
@@ -102,7 +103,9 @@ export async function handleIncomingMessage(from, messageBody) {
  */
 async function buildContext() {
   try {
-    const now = new Date();
+    const timezone = config.server.timezone || 'America/Mexico_City';
+    const nowUTC = new Date();
+    const now = utcToZonedTime(nowUTC, timezone);
     const tomorrow = addDays(now, 1);
     const availableCourts = await getAvailableCourts(now, config.establecimiento.duracionDefault);
 
@@ -196,9 +199,12 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
     const duracion = datos.duracion || config.establecimiento.duracionDefault;
     const nombreCliente = datos.nombre_cliente || 'Cliente';
 
-    // Combinar fecha y hora
-    const startTime = new Date(fecha);
-    startTime.setHours(hora.getHours(), hora.getMinutes(), 0, 0);
+    // Combinar fecha y hora en la zona horaria correcta (GMT-6)
+    const timezone = config.server.timezone || 'America/Mexico_City';
+    const startTimeLocal = new Date(fecha);
+    startTimeLocal.setHours(hora.getHours(), hora.getMinutes(), 0, 0);
+    // Convertir a UTC para las operaciones (Google Calendar usa UTC internamente)
+    const startTime = zonedTimeToUtc(startTimeLocal, timezone);
 
     // Verificar disponibilidad
     const availability = await checkAvailability(canchaId, startTime, duracion);
@@ -218,8 +224,11 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
     );
 
     const cancha = config.canchas[canchaId];
-    const fechaFormateada = format(startTime, "EEEE, d 'de' MMMM 'de' yyyy", { locale: es });
-    const horaFormateada = format(startTime, 'HH:mm');
+    const timezoneDisplay = config.server.timezone || 'America/Mexico_City';
+    // Convertir de vuelta a la zona horaria local para mostrar
+    const startTimeLocalDisplay = utcToZonedTime(startTime, timezoneDisplay);
+    const fechaFormateada = format(startTimeLocalDisplay, "EEEE, d 'de' MMMM 'de' yyyy", { locale: es });
+    const horaFormateada = format(startTimeLocalDisplay, 'HH:mm');
 
     // Marcar reserva como completada y limpiar datos de la conversación
     updateConversationData(from, { reserva_completada: true });
@@ -311,15 +320,21 @@ async function handleCourtsQuery(datos) {
  * @returns {Date}
  */
 function parseDate(dateString) {
-  if (!dateString) return new Date();
+  if (!dateString) {
+    const timezone = config.server.timezone || 'America/Mexico_City';
+    return utcToZonedTime(new Date(), timezone);
+  }
 
   // Intentar diferentes formatos
   const formats = ['yyyy-MM-dd', 'dd/MM/yyyy', 'dd-MM-yyyy', 'yyyy/MM/dd'];
+  const timezone = config.server.timezone || 'America/Mexico_City';
+  const now = utcToZonedTime(new Date(), timezone);
   
   for (const fmt of formats) {
     try {
-      const parsed = parse(dateString, fmt, new Date());
+      const parsed = parse(dateString, fmt, now);
       if (!isNaN(parsed.getTime())) {
+        // Asegurarse de que la fecha esté en la zona horaria local
         return parsed;
       }
     } catch (e) {
@@ -327,8 +342,8 @@ function parseDate(dateString) {
     }
   }
 
-  // Si no se puede parsear, usar fecha actual
-  return new Date();
+  // Si no se puede parsear, usar fecha actual en zona horaria local
+  return utcToZonedTime(new Date(), timezone);
 }
 
 /**

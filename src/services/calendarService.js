@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { config } from '../config/config.js';
 import { format, parseISO, addMinutes, isBefore, isAfter } from 'date-fns';
-import { utcToZonedTime, zonedTimeToUtc } from 'date-fns-tz';
+import { utcToZonedTime, zonedTimeToUtc, formatInTimeZone } from 'date-fns-tz';
 
 let calendarClient = null;
 
@@ -41,15 +41,32 @@ export async function getReservations(canchaId, startDate, endDate) {
   }
 
   try {
+    // Convertir fechas a UTC para la consulta
+    const timezone = config.server.timezone || 'America/Mexico_City';
+    const startDateUTC = zonedTimeToUtc(startDate, timezone);
+    const endDateUTC = zonedTimeToUtc(endDate, timezone);
+
     const response = await calendarClient.events.list({
       calendarId: cancha.calendarId,
-      timeMin: startDate.toISOString(),
-      timeMax: endDate.toISOString(),
+      timeMin: startDateUTC.toISOString(),
+      timeMax: endDateUTC.toISOString(),
       singleEvents: true,
       orderBy: 'startTime',
+      timeZone: timezone,
     });
 
-    return response.data.items || [];
+    // Convertir las fechas de las reservas de vuelta a la zona horaria local
+    const items = (response.data.items || []).map(item => {
+      if (item.start.dateTime) {
+        const startUTC = new Date(item.start.dateTime);
+        const endUTC = new Date(item.end.dateTime);
+        item.start.dateTime = utcToZonedTime(startUTC, timezone).toISOString();
+        item.end.dateTime = utcToZonedTime(endUTC, timezone).toISOString();
+      }
+      return item;
+    });
+
+    return items;
   } catch (error) {
     console.error(`Error obteniendo reservas para ${canchaId}:`, error);
     throw error;
@@ -64,12 +81,16 @@ export async function getReservations(canchaId, startDate, endDate) {
  * @returns {Promise<Object>} - { disponible: boolean, razon: string }
  */
 export async function checkAvailability(canchaId, startTime, durationMinutes) {
+  const timezone = config.server.timezone || 'America/Mexico_City';
   const endTime = addMinutes(startTime, durationMinutes);
+  
+  // Convertir startTime de UTC a zona horaria local para verificar horarios
+  const startTimeLocal = utcToZonedTime(startTime, timezone);
   
   // Verificar horario del establecimiento
   const horaApertura = parseTime(config.establecimiento.horarioApertura);
   const horaCierre = parseTime(config.establecimiento.horarioCierre);
-  const horaInicio = parseTime(format(startTime, 'HH:mm'));
+  const horaInicio = parseTime(format(startTimeLocal, 'HH:mm'));
   
   if (isBefore(horaInicio, horaApertura) || isAfter(horaInicio, horaCierre)) {
     return {
@@ -85,7 +106,11 @@ export async function checkAvailability(canchaId, startTime, durationMinutes) {
     const reservationStart = new Date(reservation.start.dateTime || reservation.start.date);
     const reservationEnd = new Date(reservation.end.dateTime || reservation.end.date);
     
-    // Verificar solapamiento
+    // Convertir a zona horaria local para mostrar
+    const reservationStartLocal = utcToZonedTime(reservationStart, timezone);
+    const reservationEndLocal = utcToZonedTime(reservationEnd, timezone);
+    
+    // Verificar solapamiento (comparar en UTC)
     if (
       (startTime >= reservationStart && startTime < reservationEnd) ||
       (endTime > reservationStart && endTime <= reservationEnd) ||
@@ -93,7 +118,7 @@ export async function checkAvailability(canchaId, startTime, durationMinutes) {
     ) {
       return {
         disponible: false,
-        razon: `La cancha ya está reservada de ${format(reservationStart, 'HH:mm')} a ${format(reservationEnd, 'HH:mm')}`,
+        razon: `La cancha ya está reservada de ${format(reservationStartLocal, 'HH:mm')} a ${format(reservationEndLocal, 'HH:mm')}`,
       };
     }
   }
@@ -128,16 +153,21 @@ export async function createReservation(canchaId, startTime, durationMinutes, cl
 
   const endTime = addMinutes(startTime, durationMinutes);
 
+  // Convertir a UTC para Google Calendar (que espera fechas en UTC)
+  const timezone = config.server.timezone || 'America/Mexico_City';
+  const startTimeUTC = zonedTimeToUtc(startTime, timezone);
+  const endTimeUTC = zonedTimeToUtc(endTime, timezone);
+
   const event = {
     summary: `Reserva Padel - ${clienteNombre}`,
     description: `Reserva realizada a través de WhatsApp Bot\nCliente: ${clienteNombre}\nTeléfono: ${clienteTelefono}`,
     start: {
-      dateTime: startTime.toISOString(),
-      timeZone: 'America/Mexico_City', // Ajustar según tu zona horaria
+      dateTime: startTimeUTC.toISOString(),
+      timeZone: timezone,
     },
     end: {
-      dateTime: endTime.toISOString(),
-      timeZone: 'America/Mexico_City',
+      dateTime: endTimeUTC.toISOString(),
+      timeZone: timezone,
     },
     reminders: {
       useDefault: false,
@@ -191,10 +221,22 @@ export async function getAvailableCourts(startTime, durationMinutes) {
  * @returns {Promise<Array>} - Lista de horarios disponibles (formato HH:mm)
  */
 export async function getAvailableTimeSlots(canchaId, date) {
+  const timezone = config.server.timezone || 'America/Mexico_City';
+  
+  // Crear fechas de inicio y fin del día en la zona horaria local
+  const startOfDay = new Date(date);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(date);
+  endOfDay.setHours(23, 59, 59, 999);
+  
+  // Convertir a UTC para la consulta
+  const startOfDayUTC = zonedTimeToUtc(startOfDay, timezone);
+  const endOfDayUTC = zonedTimeToUtc(endOfDay, timezone);
+  
   const reservations = await getReservations(
     canchaId,
-    new Date(date.setHours(0, 0, 0, 0)),
-    new Date(date.setHours(23, 59, 59, 999))
+    startOfDayUTC,
+    endOfDayUTC
   );
 
   const horaApertura = parseTime(config.establecimiento.horarioApertura);
@@ -204,29 +246,36 @@ export async function getAvailableTimeSlots(canchaId, date) {
   const availableSlots = [];
   let currentTime = new Date(date);
   currentTime.setHours(horaApertura.getHours(), horaApertura.getMinutes(), 0, 0);
+  // Convertir a UTC para comparaciones
+  let currentTimeUTC = zonedTimeToUtc(currentTime, timezone);
 
-  while (currentTime.getHours() < horaCierre.getHours() || 
-         (currentTime.getHours() === horaCierre.getHours() && currentTime.getMinutes() < horaCierre.getMinutes())) {
-    const slotEnd = addMinutes(currentTime, duracion);
+  const endOfDayTime = new Date(date);
+  endOfDayTime.setHours(horaCierre.getHours(), horaCierre.getMinutes(), 0, 0);
+  const endOfDayTimeUTC = zonedTimeToUtc(endOfDayTime, timezone);
+  
+  while (currentTimeUTC < endOfDayTimeUTC) {
+    const slotEndUTC = addMinutes(currentTimeUTC, duracion);
     
-    if (slotEnd <= new Date(date.setHours(horaCierre.getHours(), horaCierre.getMinutes(), 0, 0))) {
+    if (slotEndUTC <= endOfDayTimeUTC) {
       // Verificar si este slot está disponible
       const isAvailable = !reservations.some(reservation => {
         const resStart = new Date(reservation.start.dateTime || reservation.start.date);
         const resEnd = new Date(reservation.end.dateTime || reservation.end.date);
         return (
-          (currentTime >= resStart && currentTime < resEnd) ||
-          (slotEnd > resStart && slotEnd <= resEnd) ||
-          (currentTime <= resStart && slotEnd >= resEnd)
+          (currentTimeUTC >= resStart && currentTimeUTC < resEnd) ||
+          (slotEndUTC > resStart && slotEndUTC <= resEnd) ||
+          (currentTimeUTC <= resStart && slotEndUTC >= resEnd)
         );
       });
 
       if (isAvailable) {
-        availableSlots.push(format(currentTime, 'HH:mm'));
+        // Convertir de vuelta a zona horaria local para mostrar
+        const currentTimeLocal = utcToZonedTime(currentTimeUTC, timezone);
+        availableSlots.push(format(currentTimeLocal, 'HH:mm'));
       }
     }
 
-    currentTime = addMinutes(currentTime, 30); // Incrementos de 30 minutos
+    currentTimeUTC = addMinutes(currentTimeUTC, 30); // Incrementos de 30 minutos
   }
 
   return availableSlots;

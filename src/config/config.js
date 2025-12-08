@@ -22,6 +22,7 @@ export const config = {
   server: {
     port: process.env.PORT || 3000,
     nodeEnv: process.env.NODE_ENV || 'development',
+    timezone: process.env.TIMEZONE || 'America/Mexico_City', // GMT-6
   },
   establecimiento: {
     nombre: process.env.ESTABLECIMIENTO_NOMBRE || 'Centro de Padel',
