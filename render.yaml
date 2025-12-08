@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: padel-booking-bot
+    env: node
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromService:
+          type: web
+          name: padel-booking-bot
+          property: port
+
