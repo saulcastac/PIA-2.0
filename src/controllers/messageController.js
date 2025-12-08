@@ -201,10 +201,30 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
 
     // Combinar fecha y hora en la zona horaria correcta (GMT-6)
     const timezone = config.server.timezone || 'America/Mexico_City';
-    const startTimeLocal = new Date(fecha);
-    startTimeLocal.setHours(hora.getHours(), hora.getMinutes(), 0, 0);
-    // Convertir a UTC para las operaciones (Google Calendar usa UTC internamente)
-    const startTime = zonedTimeToUtc(startTimeLocal, timezone);
+    
+    // Obtener componentes de fecha y hora
+    const year = fecha.getFullYear();
+    const month = fecha.getMonth();
+    const day = fecha.getDate();
+    const hours = hora.getHours();
+    const minutes = hora.getMinutes();
+    
+    // Crear fecha en la zona horaria local del servidor primero
+    // Luego usamos zonedTimeToUtc para interpretarla como si fuera en GMT-6
+    const localDate = new Date(year, month, day, hours, minutes, 0, 0);
+    
+    // zonedTimeToUtc interpreta la fecha como si estuviera en la zona horaria especificada
+    // y la convierte a UTC. El problema es que localDate está en la zona horaria del servidor.
+    // Necesitamos ajustar esto manualmente calculando la diferencia.
+    
+    // Solución: crear la fecha como string ISO con el offset de GMT-6
+    // GMT-6 es UTC-6, así que el offset es -06:00
+    const dateTimeString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00-06:00`;
+    const dateInTimezone = new Date(dateTimeString);
+    
+    // Ahora convertimos a UTC (aunque dateInTimezone ya está en UTC internamente)
+    // Pero para ser consistentes con el resto del código, usamos zonedTimeToUtc
+    const startTime = zonedTimeToUtc(dateInTimezone, timezone);
 
     // Verificar disponibilidad
     const availability = await checkAvailability(canchaId, startTime, duracion);
@@ -315,7 +335,7 @@ async function handleCourtsQuery(datos) {
 }
 
 /**
- * Parsea una fecha desde diferentes formatos
+ * Parsea una fecha desde diferentes formatos, incluyendo fechas relativas
  * @param {string} dateString - String de fecha
  * @returns {Date}
  */
@@ -325,10 +345,26 @@ function parseDate(dateString) {
     return utcToZonedTime(new Date(), timezone);
   }
 
-  // Intentar diferentes formatos
-  const formats = ['yyyy-MM-dd', 'dd/MM/yyyy', 'dd-MM-yyyy', 'yyyy/MM/dd'];
   const timezone = config.server.timezone || 'America/Mexico_City';
   const now = utcToZonedTime(new Date(), timezone);
+  
+  // Manejar fechas relativas
+  const dateLower = dateString.toLowerCase().trim();
+  
+  if (dateLower === 'hoy' || dateLower === 'today') {
+    return now;
+  }
+  
+  if (dateLower === 'mañana' || dateLower === 'tomorrow' || dateLower === 'mañana' || dateLower === 'mañ') {
+    return addDays(now, 1);
+  }
+  
+  if (dateLower === 'pasado mañana' || dateLower === 'day after tomorrow') {
+    return addDays(now, 2);
+  }
+  
+  // Intentar diferentes formatos de fecha
+  const formats = ['yyyy-MM-dd', 'dd/MM/yyyy', 'dd-MM-yyyy', 'yyyy/MM/dd'];
   
   for (const fmt of formats) {
     try {
@@ -347,25 +383,60 @@ function parseDate(dateString) {
 }
 
 /**
- * Parsea una hora desde diferentes formatos
+ * Parsea una hora desde diferentes formatos (24h y 12h con AM/PM)
  * @param {string} timeString - String de hora
  * @returns {Date}
  */
 function parseTime(timeString) {
   if (!timeString) {
-    const now = new Date();
+    const timezone = config.server.timezone || 'America/Mexico_City';
+    const now = utcToZonedTime(new Date(), timezone);
     now.setHours(now.getHours() + 1, 0, 0, 0); // Hora siguiente por defecto
     return now;
   }
 
-  // Formato HH:mm o HHmm
-  const cleaned = timeString.replace(/[^\d:]/g, '');
-  const [hours, minutes] = cleaned.split(':').length === 2
-    ? cleaned.split(':')
-    : [cleaned.slice(0, 2), cleaned.slice(2, 4)];
+  const timeLower = timeString.toLowerCase().trim();
+  let hours = 12;
+  let minutes = 0;
+  let isPM = false;
+
+  // Detectar formato AM/PM
+  if (timeLower.includes('am') || timeLower.includes('pm') || timeLower.includes('a.m') || timeLower.includes('p.m')) {
+    isPM = timeLower.includes('pm') || timeLower.includes('p.m');
+    
+    // Extraer números
+    const numbers = timeLower.match(/\d+/g);
+    if (numbers && numbers.length > 0) {
+      hours = parseInt(numbers[0]);
+      minutes = numbers.length > 1 ? parseInt(numbers[1]) : 0;
+      
+      // Convertir a formato 24 horas
+      if (isPM && hours !== 12) {
+        hours += 12;
+      } else if (!isPM && hours === 12) {
+        hours = 0;
+      }
+    }
+  } else {
+    // Formato 24 horas: HH:mm o HHmm
+    const cleaned = timeLower.replace(/[^\d:]/g, '');
+    const parts = cleaned.split(':');
+    
+    if (parts.length === 2) {
+      hours = parseInt(parts[0]) || 12;
+      minutes = parseInt(parts[1]) || 0;
+    } else if (cleaned.length >= 2) {
+      hours = parseInt(cleaned.slice(0, 2)) || 12;
+      minutes = cleaned.length >= 4 ? parseInt(cleaned.slice(2, 4)) : 0;
+    }
+  }
+
+  // Validar rango
+  hours = Math.max(0, Math.min(23, hours));
+  minutes = Math.max(0, Math.min(59, minutes));
 
   const date = new Date();
-  date.setHours(parseInt(hours) || 12, parseInt(minutes) || 0, 0, 0);
+  date.setHours(hours, minutes, 0, 0);
   return date;
 }
 

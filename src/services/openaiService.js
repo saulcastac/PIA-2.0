@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { config } from '../config/config.js';
+import { addDays, format } from 'date-fns';
 
 // Inicializar cliente de OpenAI de forma lazy
 let openai = null;
@@ -75,8 +76,8 @@ INSTRUCCIONES:
 1. Identifica la INTENCIÓN del usuario (reservar, consultar_horarios, consultar_canchas, otra_consulta)
 2. Extrae información relevante:
    - cancha: DEBE ser el ID de la cancha (cancha_1, cancha_2, cancha_3, cancha_4). Si el usuario menciona "monex", "gocsa", "teds" o "woodward", o el nombre de la cancha, usa el MAPEO DE CANCHAS arriba para convertir al ID correcto
-   - fecha: fecha de la reserva (si se menciona, usar formato YYYY-MM-DD para ${currentYear} o ${currentYear + 1})
-   - hora: hora de inicio (formato HH:MM en 24 horas)
+   - fecha: fecha de la reserva. Si el usuario dice "mañana" o "tomorrow", calcula la fecha de mañana (${format(addDays(new Date(), 1), 'yyyy-MM-dd')}). Si dice "hoy" o "today", usa ${currentDate}. Si menciona un día de la semana, calcula la fecha correspondiente. Formato de salida: YYYY-MM-DD para ${currentYear} o ${currentYear + 1}
+   - hora: hora de inicio. Acepta formato 24 horas (14:00) o 12 horas con AM/PM (2:00 PM, 11 AM, 11am). Formato de salida: HH:MM en 24 horas (ej: "11:00" para 11 AM, "14:00" para 2 PM, "23:00" para 11 PM)
    - duracion: duración en minutos (default: ${config.establecimiento.duracionDefault})
    - nombre_cliente: nombre del cliente (si se menciona)
 3. Si la intención es "reservar", asegúrate de extraer: cancha, fecha, hora
