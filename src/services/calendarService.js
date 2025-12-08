@@ -157,6 +157,9 @@ export async function createReservation(canchaId, startTime, durationMinutes, cl
   // Solo necesitamos asegurarnos de que endTime también esté en UTC
   const startTimeUTC = startTime;
   const endTimeUTC = endTime;
+  
+  // Obtener la zona horaria de la configuración
+  const timezone = config.server.timezone || 'America/Mexico_City';
 
   const event = {
     summary: `Reserva Padel - ${clienteNombre}`,
