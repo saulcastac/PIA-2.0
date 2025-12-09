@@ -5,6 +5,8 @@ import {
   createReservation,
   getAvailableCourts,
   getAvailableTimeSlots,
+  findReservationsByPhone,
+  cancelReservation,
 } from '../services/calendarService.js';
 import { config } from '../config/config.js';
 import { parse, format, addDays, isToday, isTomorrow } from 'date-fns';
@@ -68,6 +70,10 @@ export async function handleIncomingMessage(from, messageBody) {
           aiResponse.datos,
           aiResponse.informacion_faltante
         );
+        break;
+
+      case 'cancelar':
+        responseMessage = await handleCancelIntent(from, aiResponse.datos);
         break;
 
       case 'consultar_horarios':
@@ -240,15 +246,38 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
     // Esto es correcto: 10 AM GMT-6 = 4 PM UTC
     const startTime = new Date(dateTimeString);
 
-    // Verificar disponibilidad
+    // SIEMPRE verificar disponibilidad ANTES de proceder con la reserva
+    console.log(`🔍 Verificando disponibilidad para ${canchaId} el ${dateTimeString}`);
     const availability = await checkAvailability(canchaId, startTime, duracion);
     
     if (!availability.disponible) {
-      return `Lo siento, ${availability.razon}.\n\n` +
-             `¿Te gustaría consultar otros horarios disponibles?`;
+      console.log(`❌ Cancha no disponible: ${availability.razon}`);
+      
+      // Obtener horarios disponibles alternativos para la misma fecha
+      const fecha = parseDate(datos.fecha);
+      const timeSlots = await getAvailableTimeSlots(canchaId, fecha);
+      const cancha = config.canchas[canchaId];
+      const timezoneDisplay = config.server.timezone || 'America/Mexico_City';
+      const fechaLocal = utcToZonedTime(new Date(startTime), timezoneDisplay);
+      const fechaTexto = format(fechaLocal, "EEEE, d 'de' MMMM", { locale: es });
+      
+      let mensajeAlternativas = '';
+      if (timeSlots.length > 0) {
+        mensajeAlternativas = `\n\n✅ Horarios disponibles para ${cancha.nombre} el ${fechaTexto}:\n${timeSlots.slice(0, 8).map(slot => `🕐 ${slot}`).join('\n')}`;
+      } else {
+        // Si no hay horarios en esa cancha, sugerir otras canchas disponibles
+        const otrasCanchas = await getAvailableCourts(startTime, duracion);
+        if (otrasCanchas.length > 0) {
+          mensajeAlternativas = `\n\n✅ Canchas disponibles en ese horario:\n${otrasCanchas.map(c => `🏸 ${c.nombre}`).join('\n')}`;
+        }
+      }
+      
+      return `❌ Lo siento, ${availability.razon}.${mensajeAlternativas}\n\n¿Te gustaría reservar en otro horario o cancha?`;
     }
+    
+    console.log(`✅ Cancha disponible, procediendo con la reserva`);
 
-    // Crear la reserva
+    // Crear la reserva (solo si está disponible)
     const reservation = await createReservation(
       canchaId,
       startTime,
@@ -277,6 +306,119 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
   } catch (error) {
     console.error('Error procesando reserva:', error);
     return `Lo siento, hubo un error al procesar tu reserva: ${error.message}.\n\n` +
+           `Por favor, intenta de nuevo o contacta directamente con el establecimiento.`;
+  }
+}
+
+/**
+ * Maneja la intención de cancelar una reserva
+ * @param {string} from - Número de teléfono del cliente
+ * @param {Object} datos - Datos extraídos (puede incluir fecha, cancha, etc.)
+ * @returns {Promise<string>} - Mensaje de respuesta
+ */
+async function handleCancelIntent(from, datos) {
+  try {
+    // Buscar reservas del cliente por su teléfono
+    const reservas = await findReservationsByPhone(from);
+    
+    if (reservas.length === 0) {
+      return `No encontré ninguna reserva activa asociada a tu número de teléfono.\n\n` +
+             `¿Estás seguro de que tienes una reserva? Si la hiciste con otro número, por favor proporciona más detalles.`;
+    }
+
+    const timezone = config.server.timezone || 'America/Mexico_City';
+    
+    // Si el usuario especificó cancha o fecha, intentar filtrar
+    let reservaACancelar = null;
+    
+    if (datos.cancha || datos.fecha) {
+      const canchaId = datos.cancha ? mapCanchaNameToId(datos.cancha) : null;
+      const fechaBuscada = datos.fecha ? parseDate(datos.fecha) : null;
+      
+      // Filtrar reservas que coincidan
+      const reservasFiltradas = reservas.filter(reserva => {
+        let coincide = true;
+        
+        if (canchaId && reserva.canchaId !== canchaId) {
+          coincide = false;
+        }
+        
+        if (fechaBuscada) {
+          const reservaStart = new Date(reserva.start.dateTime || reserva.start.date);
+          const reservaStartLocal = utcToZonedTime(reservaStart, timezone);
+          const reservaFecha = new Date(reservaStartLocal.getFullYear(), reservaStartLocal.getMonth(), reservaStartLocal.getDate());
+          const fechaBuscadaNormalizada = new Date(fechaBuscada.getFullYear(), fechaBuscada.getMonth(), fechaBuscada.getDate());
+          
+          if (reservaFecha.getTime() !== fechaBuscadaNormalizada.getTime()) {
+            coincide = false;
+          }
+        }
+        
+        return coincide;
+      });
+      
+      if (reservasFiltradas.length === 1) {
+        reservaACancelar = reservasFiltradas[0];
+      } else if (reservasFiltradas.length > 1) {
+        // Múltiples reservas que coinciden con el filtro
+        let mensaje = `Encontré ${reservasFiltradas.length} reservas que coinciden:\n\n`;
+        reservasFiltradas.forEach((reserva, index) => {
+          const startTime = new Date(reserva.start.dateTime || reserva.start.date);
+          const startTimeLocal = utcToZonedTime(startTime, timezone);
+          const fechaFormateada = format(startTimeLocal, "EEEE, d 'de' MMMM", { locale: es });
+          const horaFormateada = format(startTimeLocal, 'HH:mm');
+          mensaje += `${index + 1}. ${reserva.canchaNombre} - ${fechaFormateada} a las ${horaFormateada}\n`;
+        });
+        mensaje += `\nPor favor, especifica cuál quieres cancelar (por ejemplo: "la de las 10 AM").`;
+        return mensaje;
+      }
+    }
+
+    // Si hay múltiples reservas y no se especificó filtro, mostrar opciones
+    if (!reservaACancelar && reservas.length > 1) {
+      let mensaje = `Encontré ${reservas.length} reservas activas:\n\n`;
+      
+      reservas.forEach((reserva, index) => {
+        const startTime = new Date(reserva.start.dateTime || reserva.start.date);
+        const startTimeLocal = utcToZonedTime(startTime, timezone);
+        const fechaFormateada = format(startTimeLocal, "EEEE, d 'de' MMMM", { locale: es });
+        const horaFormateada = format(startTimeLocal, 'HH:mm');
+        
+        mensaje += `${index + 1}. ${reserva.canchaNombre} - ${fechaFormateada} a las ${horaFormateada}\n`;
+      });
+      
+      mensaje += `\nPor favor, especifica cuál reserva quieres cancelar (por ejemplo: "la de mañana" o "la de MONEX").`;
+      
+      return mensaje;
+    }
+
+    // Si hay solo una reserva o se identificó una específica, proceder a cancelarla
+    if (!reservaACancelar) {
+      reservaACancelar = reservas[0];
+    }
+    
+    const canchaId = reservaACancelar.canchaId;
+    const eventId = reservaACancelar.id;
+    
+    // Cancelar la reserva
+    await cancelReservation(canchaId, eventId);
+    
+    const startTime = new Date(reservaACancelar.start.dateTime || reservaACancelar.start.date);
+    const startTimeLocal = utcToZonedTime(startTime, timezone);
+    const fechaFormateada = format(startTimeLocal, "EEEE, d 'de' MMMM 'de' yyyy", { locale: es });
+    const horaFormateada = format(startTimeLocal, 'HH:mm');
+    
+    // Limpiar datos de la conversación
+    updateConversationData(from, { reserva_cancelada: true });
+    
+    return `✅ Reserva cancelada exitosamente\n\n` +
+           `📅 Fecha: ${fechaFormateada}\n` +
+           `🕐 Hora: ${horaFormateada}\n` +
+           `🏸 Cancha: ${reservaACancelar.canchaNombre}\n\n` +
+           `Tu reserva ha sido cancelada. Si cambias de opinión, estaré aquí para ayudarte a hacer una nueva reserva. 🎾`;
+  } catch (error) {
+    console.error('Error cancelando reserva:', error);
+    return `Lo siento, hubo un error al cancelar tu reserva: ${error.message}.\n\n` +
            `Por favor, intenta de nuevo o contacta directamente con el establecimiento.`;
   }
 }

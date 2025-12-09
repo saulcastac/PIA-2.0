@@ -196,6 +196,104 @@ export async function createReservation(canchaId, startTime, durationMinutes, cl
 }
 
 /**
+ * Busca reservas por teléfono del cliente
+ * @param {string} clienteTelefono - Teléfono del cliente
+ * @param {Date} startDate - Fecha de inicio para buscar (opcional, busca desde hoy si no se proporciona)
+ * @param {Date} endDate - Fecha de fin para buscar (opcional, busca hasta 30 días si no se proporciona)
+ * @returns {Promise<Array>} - Lista de reservas encontradas
+ */
+export async function findReservationsByPhone(clienteTelefono, startDate = null, endDate = null) {
+  if (!calendarClient) {
+    initializeCalendar();
+  }
+
+  const timezone = config.server.timezone || 'America/Mexico_City';
+  
+  // Si no se proporcionan fechas, buscar desde hoy hasta 30 días adelante
+  if (!startDate) {
+    const now = utcToZonedTime(new Date(), timezone);
+    startDate = new Date(now);
+    startDate.setHours(0, 0, 0, 0);
+  }
+  
+  if (!endDate) {
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 30);
+    endDate.setHours(23, 59, 59, 999);
+  }
+
+  const startDateUTC = zonedTimeToUtc(startDate, timezone);
+  const endDateUTC = zonedTimeToUtc(endDate, timezone);
+
+  const allReservations = [];
+
+  // Buscar en todos los calendarios de canchas
+  for (const [canchaId, cancha] of Object.entries(config.canchas)) {
+    try {
+      const response = await calendarClient.events.list({
+        calendarId: cancha.calendarId,
+        timeMin: startDateUTC.toISOString(),
+        timeMax: endDateUTC.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+        timeZone: timezone,
+      });
+
+      const events = response.data.items || [];
+      
+      // Filtrar eventos que contengan el teléfono en la descripción
+      const matchingEvents = events.filter(event => {
+        const description = event.description || '';
+        return description.includes(clienteTelefono);
+      });
+
+      // Agregar información de la cancha a cada evento
+      for (const event of matchingEvents) {
+        allReservations.push({
+          ...event,
+          canchaId: canchaId,
+          canchaNombre: cancha.nombre,
+        });
+      }
+    } catch (error) {
+      console.error(`Error buscando reservas en ${canchaId}:`, error);
+    }
+  }
+
+  return allReservations;
+}
+
+/**
+ * Cancela una reserva en Google Calendar
+ * @param {string} canchaId - ID de la cancha
+ * @param {string} eventId - ID del evento en Google Calendar
+ * @returns {Promise<boolean>} - true si se canceló exitosamente
+ */
+export async function cancelReservation(canchaId, eventId) {
+  if (!calendarClient) {
+    initializeCalendar();
+  }
+
+  const cancha = config.canchas[canchaId];
+  if (!cancha) {
+    throw new Error(`Cancha ${canchaId} no encontrada`);
+  }
+
+  try {
+    await calendarClient.events.delete({
+      calendarId: cancha.calendarId,
+      eventId: eventId,
+    });
+
+    console.log(`Reserva cancelada: ${eventId} en ${cancha.nombre}`);
+    return true;
+  } catch (error) {
+    console.error('Error cancelando reserva:', error);
+    throw error;
+  }
+}
+
+/**
  * Obtiene las canchas disponibles en un rango de tiempo
  * @param {Date} startTime - Hora de inicio
  * @param {number} durationMinutes - Duración en minutos
