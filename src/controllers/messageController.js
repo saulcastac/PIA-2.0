@@ -170,23 +170,44 @@ function mapCanchaNameToId(canchaNameOrId) {
  * @returns {Promise<string>} - Mensaje de respuesta
  */
 async function handleReservationIntent(from, datos, informacionFaltante) {
-  // Si falta información, pedirla
+  // Si falta información, pedirla de manera conversacional
   if (informacionFaltante.length > 0) {
-    const faltantes = informacionFaltante.map(f => {
-      switch (f) {
-        case 'cancha':
-          return 'la cancha';
-        case 'fecha':
-          return 'la fecha';
-        case 'hora':
-          return 'la hora';
-        default:
-          return f;
+    // Usar el mensaje de la IA si está disponible y es conversacional
+    // Si no, crear uno proactivo
+    const tieneDatosPrevios = datos.cancha || datos.fecha || datos.hora;
+    
+    if (tieneDatosPrevios) {
+      // Ya tenemos algo de información, ser más específico
+      const mensajes = [];
+      
+      if (informacionFaltante.includes('cancha') && !datos.cancha) {
+        mensajes.push('¿En qué cancha te gustaría jugar? Tenemos: ' + Object.values(config.canchas).map(c => c.nombre).join(', '));
       }
-    }).join(', ');
+      if (informacionFaltante.includes('fecha') && !datos.fecha) {
+        mensajes.push('¿Para qué día te gustaría reservar? Puedes decirme "hoy", "mañana" o una fecha específica');
+      }
+      if (informacionFaltante.includes('hora') && !datos.hora) {
+        mensajes.push('¿A qué hora te gustaría jugar?');
+      }
+      
+      return `¡Perfecto! Para completar tu reserva solo necesito:\n\n${mensajes.map(m => `• ${m}`).join('\n')}\n\n¡Con esa información estaré listo para confirmar tu reserva! 🎾`;
+    } else {
+      // No tenemos información previa, ser más general pero amigable
+      const faltantes = informacionFaltante.map(f => {
+        switch (f) {
+          case 'cancha':
+            return 'qué cancha te gustaría';
+          case 'fecha':
+            return 'para qué día';
+          case 'hora':
+            return 'a qué hora';
+          default:
+            return f;
+        }
+      }).join(', ');
 
-    return `Para realizar tu reserva, necesito la siguiente información: ${faltantes}.\n\n` +
-           `Por favor, proporciona estos datos y podré completar tu reserva.`;
+      return `¡Hola! Me encantaría ayudarte a reservar una cancha 🎾\n\nPara hacerlo, necesito saber ${faltantes}.\n\n¿Qué te parece si empezamos?`;
+    }
   }
 
   // Validar y procesar la reserva
@@ -252,7 +273,7 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
            `⏱️ Duración: ${duracion} minutos\n` +
            `🏸 Cancha: ${cancha.nombre}\n` +
            `👤 Cliente: ${nombreCliente}\n\n` +
-           `Tu reserva ha sido registrada exitosamente. ¡Te esperamos!`;
+           `Tu reserva ha sido registrada exitosamente. ¡Nos vemos en la cancha! 🎾`;
   } catch (error) {
     console.error('Error procesando reserva:', error);
     return `Lo siento, hubo un error al procesar tu reserva: ${error.message}.\n\n` +
