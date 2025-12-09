@@ -147,7 +147,7 @@ IMPORTANTE:
 
     const response = JSON.parse(completion.choices[0].message.content);
     
-    console.log('Respuesta de OpenAI:', response);
+    console.log('Respuesta de OpenAI:', JSON.stringify(response, null, 2));
     return response;
   } catch (error) {
     console.error('Error procesando mensaje con OpenAI:', error);
