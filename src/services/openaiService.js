@@ -112,8 +112,8 @@ INSTRUCCIONES TÉCNICAS:
 }
 
 EJEMPLOS DE MENSAJES:
-- Si falta info: "¡Perfecto! Para reservar ${previousData.cancha ? 'la cancha ' + previousData.cancha : 'una cancha'}, solo necesito saber ${previousData.fecha ? '' : 'qué día'} ${previousData.hora ? '' : 'y a qué hora'} te gustaría jugar. ¿Qué te parece?"
-- Si tiene casi todo: "¡Genial! Tengo casi todo. Solo me falta ${informacion_faltante.join(' y ')}. ¿Cuál prefieres?"
+- Si falta info: "¡Perfecto! Para reservar una cancha, solo necesito saber qué día y a qué hora te gustaría jugar. ¿Qué te parece?"
+- Si tiene casi todo: "¡Genial! Tengo casi todo. Solo me falta [menciona lo que falta]. ¿Cuál prefieres?"
 - Si está completo: "¡Perfecto! Voy a confirmar tu reserva ahora mismo."
 
 IMPORTANTE:
