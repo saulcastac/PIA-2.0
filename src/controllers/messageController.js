@@ -76,6 +76,15 @@ export async function handleIncomingMessage(from, messageBody) {
         responseMessage = await handleCancelIntent(from, aiResponse.datos);
         break;
 
+      case 'mover':
+      case 'cambiar':
+        responseMessage = await handleMoveIntent(
+          from,
+          aiResponse.datos,
+          aiResponse.informacion_faltante
+        );
+        break;
+
       case 'consultar_horarios':
         responseMessage = await handleScheduleQuery(aiResponse.datos);
         break;
@@ -195,6 +204,9 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
       if (informacionFaltante.includes('hora') && !datos.hora) {
         mensajes.push('¿A qué hora te gustaría jugar?');
       }
+      if (informacionFaltante.includes('nombre_cliente') && !datos.nombre_cliente) {
+        mensajes.push('¿Cuál es tu nombre? (o el nombre de la persona que hará la reserva)');
+      }
       
       return `¡Perfecto! Para completar tu reserva solo necesito:\n\n${mensajes.map(m => `• ${m}`).join('\n')}\n\n¡Con esa información estaré listo para confirmar tu reserva! 🎾`;
     } else {
@@ -207,6 +219,8 @@ async function handleReservationIntent(from, datos, informacionFaltante) {
             return 'para qué día';
           case 'hora':
             return 'a qué hora';
+          case 'nombre_cliente':
+            return 'tu nombre';
           default:
             return f;
         }
@@ -419,6 +433,207 @@ async function handleCancelIntent(from, datos) {
   } catch (error) {
     console.error('Error cancelando reserva:', error);
     return `Lo siento, hubo un error al cancelar tu reserva: ${error.message}.\n\n` +
+           `Por favor, intenta de nuevo o contacta directamente con el establecimiento.`;
+  }
+}
+
+/**
+ * Maneja la intención de mover/cambiar una reserva existente
+ * @param {string} from - Número de teléfono del cliente
+ * @param {Object} datos - Datos extraídos (nueva fecha, hora, cancha, etc.)
+ * @param {Array} informacionFaltante - Información que falta
+ * @returns {Promise<string>} - Mensaje de respuesta
+ */
+async function handleMoveIntent(from, datos, informacionFaltante) {
+  try {
+    const timezone = config.server.timezone || 'America/Mexico_City';
+    
+    // Primero, buscar reservas existentes del usuario
+    const reservasExistentes = await findReservationsByPhone(from);
+    
+    if (reservasExistentes.length === 0) {
+      return `No encontré ninguna reserva activa asociada a tu número.\n\n` +
+             `¿Te gustaría hacer una nueva reserva en su lugar? 🎾`;
+    }
+
+    // Si falta información sobre la nueva reserva, pedirla
+    if (informacionFaltante.length > 0) {
+      const mensajes = [];
+      
+      if (informacionFaltante.includes('fecha') && !datos.fecha) {
+        mensajes.push('¿Para qué día quieres mover la reserva?');
+      }
+      if (informacionFaltante.includes('hora') && !datos.hora) {
+        mensajes.push('¿A qué hora quieres mover la reserva?');
+      }
+      if (informacionFaltante.includes('cancha') && !datos.cancha) {
+        mensajes.push('¿A qué cancha quieres mover la reserva?');
+      }
+      
+      // Mostrar reservas existentes para referencia
+      let reservasTexto = '\n\n📋 Tus reservas actuales:\n';
+      reservasExistentes.slice(0, 3).forEach((reserva, index) => {
+        const startTime = new Date(reserva.start.dateTime || reserva.start.date);
+        const startTimeLocal = utcToZonedTime(startTime, timezone);
+        const fechaFormateada = format(startTimeLocal, "EEEE, d 'de' MMMM", { locale: es });
+        const horaFormateada = format(startTimeLocal, 'HH:mm');
+        reservasTexto += `${index + 1}. ${reserva.canchaNombre} - ${fechaFormateada} a las ${horaFormateada}\n`;
+      });
+      
+      return `¡Perfecto! Para mover tu reserva, necesito:\n\n${mensajes.map(m => `• ${m}`).join('\n')}${reservasTexto}\n\n¿Cuál quieres mover?`;
+    }
+
+    // Identificar qué reserva mover
+    let reservaAMover = null;
+    
+    if (reservasExistentes.length === 1) {
+      reservaAMover = reservasExistentes[0];
+    } else {
+      // Si hay múltiples reservas, intentar identificar por cancha o fecha
+      if (datos.cancha || datos.fecha) {
+        const canchaId = datos.cancha ? mapCanchaNameToId(datos.cancha) : null;
+        const fechaBuscada = datos.fecha ? parseDate(datos.fecha) : null;
+        
+        const reservasFiltradas = reservasExistentes.filter(reserva => {
+          let coincide = true;
+          
+          if (canchaId && reserva.canchaId !== canchaId) {
+            coincide = false;
+          }
+          
+          if (fechaBuscada) {
+            const reservaStart = new Date(reserva.start.dateTime || reserva.start.date);
+            const reservaStartLocal = utcToZonedTime(reservaStart, timezone);
+            const reservaFecha = new Date(reservaStartLocal.getFullYear(), reservaStartLocal.getMonth(), reservaStartLocal.getDate());
+            const fechaBuscadaNormalizada = new Date(fechaBuscada.getFullYear(), fechaBuscada.getMonth(), fechaBuscada.getDate());
+            
+            if (reservaFecha.getTime() !== fechaBuscadaNormalizada.getTime()) {
+              coincide = false;
+            }
+          }
+          
+          return coincide;
+        });
+        
+        if (reservasFiltradas.length === 1) {
+          reservaAMover = reservasFiltradas[0];
+        } else if (reservasFiltradas.length > 1) {
+          // Múltiples reservas que coinciden
+          let mensaje = `Encontré ${reservasFiltradas.length} reservas que coinciden:\n\n`;
+          reservasFiltradas.forEach((reserva, index) => {
+            const startTime = new Date(reserva.start.dateTime || reserva.start.date);
+            const startTimeLocal = utcToZonedTime(startTime, timezone);
+            const fechaFormateada = format(startTimeLocal, "EEEE, d 'de' MMMM", { locale: es });
+            const horaFormateada = format(startTimeLocal, 'HH:mm');
+            mensaje += `${index + 1}. ${reserva.canchaNombre} - ${fechaFormateada} a las ${horaFormateada}\n`;
+          });
+          mensaje += `\nPor favor, especifica cuál quieres mover (por ejemplo: "la de las 10 AM").`;
+          return mensaje;
+        }
+      }
+      
+      // Si no se pudo identificar, mostrar todas las reservas
+      if (!reservaAMover) {
+        let mensaje = `Tienes ${reservasExistentes.length} reservas activas:\n\n`;
+        reservasExistentes.forEach((reserva, index) => {
+          const startTime = new Date(reserva.start.dateTime || reserva.start.date);
+          const startTimeLocal = utcToZonedTime(startTime, timezone);
+          const fechaFormateada = format(startTimeLocal, "EEEE, d 'de' MMMM", { locale: es });
+          const horaFormateada = format(startTimeLocal, 'HH:mm');
+          mensaje += `${index + 1}. ${reserva.canchaNombre} - ${fechaFormateada} a las ${horaFormateada}\n`;
+        });
+        mensaje += `\nPor favor, especifica cuál quieres mover y a qué fecha/hora/cancha nueva.`;
+        return mensaje;
+      }
+    }
+
+    // Ahora procesar el movimiento: cancelar la anterior y crear la nueva
+    // Obtener datos de la nueva reserva (usar los nuevos datos o mantener los de la reserva anterior)
+    let nuevaCanchaId = datos.cancha ? mapCanchaNameToId(datos.cancha) : reservaAMover.canchaId;
+    const nuevaFecha = datos.fecha ? parseDate(datos.fecha) : parseDate(null);
+    const nuevaHora = datos.hora ? parseTime(datos.hora) : (() => {
+      const reservaStart = new Date(reservaAMover.start.dateTime || reservaAMover.start.date);
+      return utcToZonedTime(reservaStart, timezone);
+    })();
+    const duracion = datos.duracion || (() => {
+      const reservaStart = new Date(reservaAMover.start.dateTime || reservaAMover.start.date);
+      const reservaEnd = new Date(reservaAMover.end.dateTime || reservaAMover.end.date);
+      return Math.round((reservaEnd - reservaStart) / (1000 * 60));
+    })();
+    
+    // Extraer nombre del cliente de la reserva anterior
+    const descripcion = reservaAMover.description || '';
+    const nombreMatch = descripcion.match(/Cliente:\s*(.+)/);
+    const nombreCliente = datos.nombre_cliente || (nombreMatch ? nombreMatch[1].split('\n')[0].trim() : 'Cliente');
+
+    // Crear fecha/hora de inicio para la nueva reserva
+    const year = nuevaFecha.getFullYear();
+    const month = nuevaFecha.getMonth();
+    const day = nuevaFecha.getDate();
+    const hours = nuevaHora.getHours();
+    const minutes = nuevaHora.getMinutes();
+    
+    const dateTimeString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00-06:00`;
+    const nuevoStartTime = new Date(dateTimeString);
+
+    // Verificar disponibilidad de la nueva reserva
+    const availability = await checkAvailability(nuevaCanchaId, nuevoStartTime, duracion);
+    
+    if (!availability.disponible) {
+      const timeSlots = await getAvailableTimeSlots(nuevaCanchaId, nuevaFecha);
+      const cancha = config.canchas[nuevaCanchaId];
+      const fechaLocal = utcToZonedTime(nuevoStartTime, timezone);
+      const fechaTexto = format(fechaLocal, "EEEE, d 'de' MMMM", { locale: es });
+      
+      let mensajeAlternativas = '';
+      if (timeSlots.length > 0) {
+        mensajeAlternativas = `\n\n✅ Horarios disponibles para ${cancha.nombre} el ${fechaTexto}:\n${timeSlots.slice(0, 8).map(slot => `🕐 ${slot}`).join('\n')}`;
+      }
+      
+      return `❌ Lo siento, el nuevo horario no está disponible: ${availability.razon}.${mensajeAlternativas}\n\n¿Te gustaría elegir otro horario?`;
+    }
+
+    // Cancelar la reserva anterior
+    await cancelReservation(reservaAMover.canchaId, reservaAMover.id);
+    
+    // Crear la nueva reserva
+    const nuevaReserva = await createReservation(
+      nuevaCanchaId,
+      nuevoStartTime,
+      duracion,
+      nombreCliente,
+      from
+    );
+
+    const cancha = config.canchas[nuevaCanchaId];
+    const startTimeLocalDisplay = utcToZonedTime(nuevoStartTime, timezone);
+    const fechaFormateada = format(startTimeLocalDisplay, "EEEE, d 'de' MMMM 'de' yyyy", { locale: es });
+    const horaFormateada = format(startTimeLocalDisplay, 'HH:mm');
+
+    // Mostrar información de la reserva anterior cancelada
+    const reservaAnteriorStart = new Date(reservaAMover.start.dateTime || reservaAMover.start.date);
+    const reservaAnteriorLocal = utcToZonedTime(reservaAnteriorStart, timezone);
+    const fechaAnteriorFormateada = format(reservaAnteriorLocal, "EEEE, d 'de' MMMM 'de' yyyy", { locale: es });
+    const horaAnteriorFormateada = format(reservaAnteriorLocal, 'HH:mm');
+
+    // Limpiar datos de la conversación
+    updateConversationData(from, { reserva_completada: true });
+
+    return `✅ ¡Reserva movida exitosamente!\n\n` +
+           `❌ Reserva anterior cancelada:\n` +
+           `   📅 ${fechaAnteriorFormateada}\n` +
+           `   🕐 ${horaAnteriorFormateada}\n` +
+           `   🏸 ${reservaAMover.canchaNombre}\n\n` +
+           `✅ Nueva reserva confirmada:\n` +
+           `   📅 ${fechaFormateada}\n` +
+           `   🕐 ${horaFormateada}\n` +
+           `   ⏱️ Duración: ${duracion} minutos\n` +
+           `   🏸 Cancha: ${cancha.nombre}\n` +
+           `   👤 Cliente: ${nombreCliente}\n\n` +
+           `Tu reserva ha sido actualizada. ¡Nos vemos en la cancha! 🎾`;
+  } catch (error) {
+    console.error('Error moviendo reserva:', error);
+    return `Lo siento, hubo un error al mover tu reserva: ${error.message}.\n\n` +
            `Por favor, intenta de nuevo o contacta directamente con el establecimiento.`;
   }
 }
