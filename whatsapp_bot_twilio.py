@@ -425,6 +425,45 @@ class PadelReservationBotTwilio:
                 
                 # Si pregunta por canchas disponibles
                 if reservation_info.get("pregunta_info") and reservation_info.get("tipo_pregunta") == "canchas_disponibles":
+                    # Si tiene fecha y hora, consultar disponibilidad real en Google Calendar
+                    fecha = reservation_info.get("fecha")
+                    hora = reservation_info.get("hora")
+                    
+                    if fecha and hora:
+                        # Consultar disponibilidad real
+                        try:
+                            from datetime import datetime as dt
+                            fecha_obj = dt.strptime(fecha, "%Y-%m-%d")
+                            
+                            google_calendar = await get_google_calendar_instance()
+                            disponibilidad = google_calendar.check_time_availability(
+                                date=fecha_obj,
+                                time_slot=hora,
+                                duration_minutes=60
+                            )
+                            
+                            if disponibilidad.get("disponible"):
+                                canchas = disponibilidad.get("canchas_disponibles", [])
+                                mensaje = f"✅ *Canchas disponibles el {fecha_obj.strftime('%d/%m/%Y')} a las {hora}:*\n\n"
+                                for cancha in canchas:
+                                    mensaje += f"🏓 *{cancha}*\n"
+                                mensaje += "\n💡 *¿Quieres reservar alguna?*"
+                            else:
+                                mensaje = f"❌ *No hay canchas disponibles el {fecha_obj.strftime('%d/%m/%Y')} a las {hora}.*\n\n"
+                                ocupadas = disponibilidad.get("canchas_ocupadas", [])
+                                if ocupadas:
+                                    mensaje += "*Canchas ocupadas:*\n"
+                                    for item in ocupadas:
+                                        mensaje += f"• {item['cancha']}: {item['razon']}\n"
+                                mensaje += "\n💡 *¿Quieres consultar otro horario?*"
+                            
+                            await self.send_message(user.phone_number, mensaje)
+                            return
+                        except Exception as e:
+                            logger.error(f"Error consultando disponibilidad: {e}")
+                            # Fallback a respuesta estándar
+                    
+                    # Si no tiene fecha/hora específica, mostrar información general
                     response_message = self.chatbot.generate_response_message(reservation_info)
                     await self.send_message(user.phone_number, response_message)
                     return
@@ -436,6 +475,53 @@ class PadelReservationBotTwilio:
                     # Cambiar estado a waiting_intent para continuar conversación
                     conv_state.state = "waiting_intent"
                     self.db.commit()
+                    return
+                
+                # Si es solicitud de cambio de duración
+                if reservation_info.get("cambiar_duracion") or (reservation_info.get("duracion") and reservation_info.get("duracion") != 60 and not reservation_info.get("cancha")):
+                    nueva_duracion = reservation_info.get("duracion", 60)
+                    # Buscar reserva más reciente del usuario
+                    reserva = self.db.query(Reservation).filter(
+                        Reservation.user_id == user.id,
+                        Reservation.status == "confirmed"
+                    ).order_by(Reservation.date.desc()).first()
+                    
+                    if reserva and reserva.google_calendar_event_id:
+                        try:
+                            google_calendar = await get_google_calendar_instance()
+                            resultado = google_calendar.update_event_duration(
+                                event_id=reserva.google_calendar_event_id,
+                                new_duration_minutes=nueva_duracion,
+                                court_name=reserva.court_name
+                            )
+                            
+                            if resultado:
+                                # Actualizar en BD
+                                reserva.duration_minutes = nueva_duracion
+                                self.db.commit()
+                                
+                                await self.send_message(
+                                    user.phone_number,
+                                    f"✅ *Duración actualizada*\n\n"
+                                    f"⏱️ Nueva duración: {nueva_duracion} minutos\n"
+                                    f"📆 Evento actualizado en Google Calendar"
+                                )
+                            else:
+                                await self.send_message(
+                                    user.phone_number,
+                                    "❌ No se pudo actualizar la duración. Por favor intenta más tarde."
+                                )
+                        except Exception as e:
+                            logger.error(f"Error actualizando duración: {e}")
+                            await self.send_message(
+                                user.phone_number,
+                                "❌ Ocurrió un error al actualizar la duración."
+                            )
+                    else:
+                        await self.send_message(
+                            user.phone_number,
+                            "❌ No encontré una reserva activa para actualizar."
+                        )
                     return
                 
                 # Si es una reserva con información completa y confirmada

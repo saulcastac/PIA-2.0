@@ -7,6 +7,7 @@ import pickle
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
+from dateutil.parser import parse as parse_date
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -284,6 +285,186 @@ class GoogleCalendarClient:
         except Exception as e:
             logger.error(f"❌ Error inesperado obteniendo disponibilidad: {e}")
             return []
+    
+    def check_time_availability(self, date: datetime, time_slot: str, duration_minutes: int = 60, court_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Verificar si un horario específico está disponible en una cancha
+        
+        Args:
+            date: Fecha de la reserva
+            time_slot: Hora en formato "HH:MM"
+            duration_minutes: Duración en minutos
+            court_name: Nombre de la cancha (opcional, verifica todas si no se especifica)
+        
+        Returns:
+            Dict con información de disponibilidad:
+            {
+                "disponible": bool,
+                "canchas_disponibles": [lista de canchas disponibles],
+                "canchas_ocupadas": [lista de canchas ocupadas con razón]
+            }
+        """
+        if not self.authenticated or not self.service:
+            logger.error("No autenticado. Llama a authenticate() primero.")
+            return {"disponible": False, "canchas_disponibles": [], "canchas_ocupadas": []}
+        
+        try:
+            # Parsear hora
+            hour, minute = map(int, time_slot.split(':'))
+            
+            # Crear datetime de inicio
+            start_datetime = date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            tz = pytz.timezone(TIMEZONE)
+            if start_datetime.tzinfo is None:
+                start_datetime = tz.localize(start_datetime)
+            
+            # Calcular datetime de fin
+            end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+            
+            canchas_disponibles = []
+            canchas_ocupadas = []
+            
+            # Si se especifica una cancha, verificar solo esa
+            if court_name:
+                canchas_a_verificar = [court_name]
+            else:
+                # Verificar todas las canchas
+                canchas_a_verificar = list(COURT_CALENDAR_MAPPING.keys())
+            
+            for cancha in canchas_a_verificar:
+                calendar_id = COURT_CALENDAR_MAPPING.get(cancha, GOOGLE_CALENDAR_ID)
+                
+                # Obtener eventos en el rango de tiempo
+                time_min = start_datetime.isoformat()
+                time_max = end_datetime.isoformat()
+                
+                events_result = self.service.events().list(
+                    calendarId=calendar_id,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy='startTime'
+                ).execute()
+                
+                events = events_result.get('items', [])
+                
+                # Verificar si hay conflictos
+                conflicto = False
+                razon = ""
+                
+                for event in events:
+                    event_start = event.get('start', {}).get('dateTime')
+                    event_end = event.get('end', {}).get('dateTime')
+                    
+                    if event_start and event_end:
+                        # Parsear fechas del evento
+                        event_start_dt = parse_date(event_start)
+                        event_end_dt = parse_date(event_end)
+                        
+                        # Verificar solapamiento
+                        if (start_datetime < event_end_dt and end_datetime > event_start_dt):
+                            conflicto = True
+                            # Formatear hora del conflicto
+                            event_start_str = event_start_dt.strftime("%H:%M")
+                            event_end_str = event_end_dt.strftime("%H:%M")
+                            razon = f"Ocupada de {event_start_str} a {event_end_str}"
+                            break
+                
+                if conflicto:
+                    canchas_ocupadas.append({"cancha": cancha, "razon": razon})
+                else:
+                    canchas_disponibles.append(cancha)
+            
+            return {
+                "disponible": len(canchas_disponibles) > 0,
+                "canchas_disponibles": canchas_disponibles,
+                "canchas_ocupadas": canchas_ocupadas
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error verificando disponibilidad: {e}")
+            return {"disponible": False, "canchas_disponibles": [], "canchas_ocupadas": []}
+    
+    def update_event_duration(self, event_id: str, new_duration_minutes: int, court_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Actualizar la duración de un evento existente
+        
+        Args:
+            event_id: ID del evento a actualizar
+            new_duration_minutes: Nueva duración en minutos
+            court_name: Nombre de la cancha (opcional, para obtener el calendario correcto)
+        
+        Returns:
+            Dict con información del evento actualizado, None si falló
+        """
+        if not self.authenticated or not self.service:
+            logger.error("No autenticado. Llama a authenticate() primero.")
+            return None
+        
+        try:
+            # Obtener el calendario específico para esta cancha
+            calendar_id = COURT_CALENDAR_MAPPING.get(court_name, GOOGLE_CALENDAR_ID) if court_name else GOOGLE_CALENDAR_ID
+            
+            # Obtener el evento actual
+            event = self.service.events().get(
+                calendarId=calendar_id,
+                eventId=event_id
+            ).execute()
+            
+            if not event:
+                logger.error(f"Evento {event_id} no encontrado")
+                return None
+            
+            # Obtener hora de inicio actual
+            start_time_str = event.get('start', {}).get('dateTime')
+            if not start_time_str:
+                logger.error("El evento no tiene hora de inicio")
+                return None
+            
+            # Parsear hora de inicio
+            start_datetime = parse_date(start_time_str)
+            
+            # Calcular nueva hora de fin
+            end_datetime = start_datetime + timedelta(minutes=new_duration_minutes)
+            
+            # Actualizar evento
+            event['end'] = {
+                'dateTime': end_datetime.isoformat(),
+                'timeZone': TIMEZONE,
+            }
+            
+            # Actualizar descripción si existe
+            description = event.get('description', '')
+            if 'Duración:' in description:
+                # Reemplazar duración existente
+                import re
+                description = re.sub(r'Duración:\s*\d+\s*minutos?', f'Duración: {new_duration_minutes} minutos', description)
+            else:
+                description += f"\nDuración: {new_duration_minutes} minutos"
+            event['description'] = description
+            
+            # Guardar cambios
+            updated_event = self.service.events().update(
+                calendarId=calendar_id,
+                eventId=event_id,
+                body=event
+            ).execute()
+            
+            logger.info(f"✅ Duración del evento actualizada a {new_duration_minutes} minutos")
+            
+            return {
+                'id': updated_event.get('id'),
+                'htmlLink': updated_event.get('htmlLink'),
+                'start': updated_event.get('start'),
+                'end': updated_event.get('end')
+            }
+            
+        except HttpError as e:
+            logger.error(f"❌ Error actualizando duración del evento: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error inesperado actualizando duración: {e}")
+            return None
 
 
 # Instancia global del cliente

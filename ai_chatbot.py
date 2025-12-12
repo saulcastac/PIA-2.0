@@ -139,18 +139,24 @@ FECHA MAÑANA: {tomorrow_str}
 
 TIPOS DE MENSAJES QUE PUEDES RECIBIR:
 1. PREGUNTAS SOBRE CANCHAS DISPONIBLES:
-   - "qué canchas tiene disponible"
-   - "cuáles canchas hay"
-   - "qué canchas tienes"
-   - "canchas disponibles"
-   → Responde: {{"es_reserva": false, "pregunta_info": true, "tipo_pregunta": "canchas_disponibles"}}
+   - "qué canchas tiene disponible [fecha] a las [hora]"
+   - "canchas disponibles mañana a las 2pm"
+   - "qué canchas hay el martes a las 10:00"
+   - "disponible el 15/12 a las 14:00"
+   → Responde: {{"es_reserva": false, "pregunta_info": true, "tipo_pregunta": "canchas_disponibles", "fecha": "YYYY-MM-DD", "hora": "HH:MM"}}
 
-2. PREGUNTAS GENERALES O SALUDOS:
+2. SOLICITUDES DE CAMBIO DE DURACIÓN:
+   - "extender a 90 minutos", "cambiar a 90 minutos", "90 minutos"
+   - "quiero 90 minutos", "hazlo de 90 minutos", "extender la sesión a 90"
+   - "quiero que dure 90 minutos", "cambiar duración a 90"
+   → Responde: {{"es_reserva": true, "cambiar_duracion": true, "duracion": 90, "confirmado": true}}
+
+3. PREGUNTAS GENERALES O SALUDOS:
    - "hola", "buenos días", "qué tal"
    - "cómo funciona", "qué puedes hacer"
    → Responde: {{"es_reserva": false, "mensaje": "saludo"}}
 
-3. SOLICITUDES DE RESERVA:
+4. SOLICITUDES DE RESERVA:
    - "quiero reservar...", "reservar...", "necesito..."
    → Extrae información y responde con JSON de reserva
 
@@ -190,7 +196,8 @@ FORMATO DE SALIDA (JSON estricto):
   "cancha": "MONEX" | "GOCSA" | "WOODWARD" | "TEDS" | null,  // EXACTAMENTE en mayúsculas
   "fecha": "YYYY-MM-DD",  // Formato ISO estricto para Google Calendar
   "hora": "HH:MM",  // Formato 24 horas (ej: "14:30" para 2:30 PM)
-  "duracion": 60,  // Minutos (default: 60)
+  "duracion": 60,  // Minutos (default: 60). Si usuario dice "90 minutos", "extender a 90", usa 90
+  "cambiar_duracion": boolean,  // true si quiere cambiar duración de reserva existente
   "confirmado": boolean  // true si quiere confirmar/reservar ahora
 }}
 
