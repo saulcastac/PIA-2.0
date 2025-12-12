@@ -33,9 +33,13 @@ class Reservation(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    playtomic_reservation_id = Column(String, nullable=True)  # ID de reserva en Playtomic
-    court_name = Column(String, nullable=False)
-    date = Column(DateTime, nullable=False)
+    playtomic_reservation_id = Column(String, nullable=True)  # ID de reserva en Playtomic (legacy)
+    google_calendar_event_id = Column(String, nullable=True)  # ID del evento en Google Calendar
+    google_calendar_link = Column(String, nullable=True)  # Link al evento en Google Calendar
+    name = Column(String, nullable=True)  # Nombre de la persona que hace la reserva
+    court_name = Column(String, nullable=False)  # Nombre de la cancha
+    date = Column(DateTime, nullable=False)  # Fecha y hora de la reserva
+    duration_minutes = Column(Integer, default=60)  # Duración en minutos
     status = Column(String, default="pending")  # pending, confirmed, completed, cancelled, no_show
     confirmed = Column(Boolean, default=False)
     reminder_24h_sent = Column(Boolean, default=False)

@@ -6,7 +6,7 @@ import logging
 import sys
 from database import init_db
 from whatsapp_bot_twilio import PadelReservationBotTwilio as PadelReservationBot
-from playtomic_automation_api import get_playtomic_instance
+from google_calendar_client import get_google_calendar_instance
 import signal
 
 # Configurar logging para que se muestre correctamente en consola de Windows
@@ -34,7 +34,7 @@ class PadelReservationApp:
     
     def __init__(self):
         self.bot = None
-        self.playtomic = None
+        self.google_calendar = None
         self.running = False
         
     async def start(self):
@@ -45,9 +45,9 @@ class PadelReservationApp:
         logger.info("Inicializando base de datos...")
         init_db()
         
-        # Iniciar Playtomic automation
-        logger.info("Iniciando módulo Playtomic...")
-        self.playtomic = await get_playtomic_instance()
+        # Iniciar Google Calendar
+        logger.info("Iniciando módulo Google Calendar...")
+        self.google_calendar = await get_google_calendar_instance()
         
         # Iniciar bot de WhatsApp
         logger.info("Iniciando bot de WhatsApp...")
@@ -63,11 +63,9 @@ class PadelReservationApp:
         logger.info("Deteniendo sistema...")
         self.running = False
         
-        if self.playtomic:
-            try:
-                await self.playtomic.close()
-            except Exception as e:
-                logger.warning(f"Error cerrando Playtomic (puede estar ya cerrado): {e}")
+        if self.google_calendar:
+            # Google Calendar no requiere cierre explícito
+            logger.info("Google Calendar desconectado")
         
         if self.bot and hasattr(self.bot, 'close'):
             try:

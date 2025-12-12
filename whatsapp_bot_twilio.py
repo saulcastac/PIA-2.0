@@ -9,7 +9,8 @@ import json
 import logging
 import os
 from database import SessionLocal, User, Reservation, ConversationState
-from playtomic_automation import get_playtomic_instance
+from google_calendar_client import get_google_calendar_instance
+from ai_chatbot import PadelReservationChatbot
 from config import TIMEZONE
 import pytz
 from twilio.rest import Client
@@ -82,6 +83,7 @@ class PadelReservationBotTwilio:
         self.twilio_client = None
         self.twilio_whatsapp_number = None
         self.app = Flask(__name__)
+        self.chatbot = PadelReservationChatbot()  # Inicializar chatbot AI
         self._setup_flask_routes()
         
     def _setup_flask_routes(self):
@@ -402,6 +404,68 @@ class PadelReservationBotTwilio:
         logger.info(f"PROCESANDO MENSAJE - Estado: {state}, Texto: '{text}'")
         logger.info(f"Usuario: {user.phone_number}")
         logger.info("=" * 80)
+        
+        # PRIMERO: Intentar procesar con AI para preguntas naturales
+        # Solo si el estado es "idle" o "waiting_intent" (conversación libre)
+        if state in ["idle", "waiting_intent", None]:
+            try:
+                # Obtener contexto previo si existe
+                context = {}
+                if conv_state.context:
+                    try:
+                        context = json.loads(conv_state.context)
+                    except:
+                        context = {}
+                
+                # Procesar con chatbot AI
+                logger.info("🤖 Procesando con chatbot AI...")
+                reservation_info = self.chatbot.extract_reservation_info(text, context)
+                
+                logger.info(f"📊 Información extraída por AI: {reservation_info}")
+                
+                # Si pregunta por canchas disponibles
+                if reservation_info.get("pregunta_info") and reservation_info.get("tipo_pregunta") == "canchas_disponibles":
+                    response_message = self.chatbot.generate_response_message(reservation_info)
+                    await self.send_message(user.phone_number, response_message)
+                    return
+                
+                # Si es saludo o pregunta general
+                if reservation_info.get("mensaje") == "saludo" or (not reservation_info.get("es_reserva", True) and not reservation_info.get("pregunta_info")):
+                    response_message = self.chatbot.generate_response_message(reservation_info)
+                    await self.send_message(user.phone_number, response_message)
+                    # Cambiar estado a waiting_intent para continuar conversación
+                    conv_state.state = "waiting_intent"
+                    self.db.commit()
+                    return
+                
+                # Si es una reserva con información completa y confirmada
+                if reservation_info.get("es_reserva") and reservation_info.get("confirmado"):
+                    if reservation_info.get("cancha") and reservation_info.get("fecha") and reservation_info.get("hora"):
+                        # Tiene toda la info, procesar reserva directamente
+                        await self.process_ai_reservation(user, reservation_info)
+                        return
+                
+                # Si es reserva pero falta info, mostrar lo que tenemos y pedir lo que falta
+                if reservation_info.get("es_reserva"):
+                    response_message = self.chatbot.generate_response_message(reservation_info)
+                    await self.send_message(user.phone_number, response_message)
+                    
+                    # Guardar contexto para continuar la conversación
+                    context.update({
+                        "nombre": reservation_info.get("nombre"),
+                        "cancha": reservation_info.get("cancha"),
+                        "fecha": reservation_info.get("fecha"),
+                        "hora": reservation_info.get("hora"),
+                        "duracion": reservation_info.get("duracion", 60)
+                    })
+                    conv_state.context = json.dumps(context)
+                    conv_state.state = "waiting_intent"  # Mantener en conversación libre
+                    self.db.commit()
+                    return
+                    
+            except Exception as e:
+                logger.error(f"Error procesando con AI: {e}")
+                # Continuar con el flujo normal si falla AI
         
         if text in ["hola", "hi", "inicio", "start", "/start"]:
             # Enviar mensaje de bienvenida
@@ -777,6 +841,87 @@ Puedo ayudarte a:
         
         await self.send_message(user.phone_number, message)
     
+    async def process_ai_reservation(self, user: User, reservation_info: Dict):
+        """Procesar reserva directamente desde información del chatbot AI"""
+        try:
+            court_name = reservation_info.get("cancha")
+            fecha_str = reservation_info.get("fecha")
+            hora = reservation_info.get("hora")
+            nombre = reservation_info.get("nombre")
+            duracion = reservation_info.get("duracion", 60)
+            
+            if not court_name or not fecha_str or not hora:
+                logger.error("Información incompleta para reserva")
+                return
+            
+            # Parsear fecha
+            date = datetime.strptime(fecha_str, "%Y-%m-%d")
+            date_time = datetime.combine(date.date(), datetime.strptime(hora, "%H:%M").time())
+            date_time = self.timezone.localize(date_time)
+            
+            # Verificar si requiere prepago
+            if user.requires_prepayment:
+                await self.send_message(
+                    user.phone_number,
+                    "⚠️ Tu cuenta requiere prepago debido a reservas anteriores sin asistencia.\n"
+                    "Por favor realiza el pago antes de confirmar."
+                )
+                return
+            
+            # Realizar reserva en Google Calendar
+            await self.send_message(user.phone_number, "🔄 Confirmando reserva en Google Calendar...")
+            
+            google_calendar = await get_google_calendar_instance()
+            event_result = google_calendar.create_event(
+                court_name=court_name,
+                date=date,
+                time_slot=hora,
+                duration_minutes=duracion,
+                name=nombre if nombre else (user.name if user.name else None)
+            )
+            
+            if event_result and event_result.get('id'):
+                # Crear reserva en BD
+                reservation = Reservation(
+                    user_id=user.id,
+                    google_calendar_event_id=event_result.get('id'),
+                    google_calendar_link=event_result.get('htmlLink'),
+                    court_name=court_name,
+                    date=date_time,
+                    status="confirmed",
+                    confirmed=True,
+                    name=nombre if nombre else None
+                )
+                self.db.add(reservation)
+                self.db.commit()
+                
+                calendar_link = event_result.get('htmlLink', '')
+                message = f"""✅ ¡Reserva confirmada!
+
+🏓 Cancha: {court_name}
+📅 Fecha: {date.strftime('%d/%m/%Y')}
+⏰ Hora: {hora}
+📆 Evento creado en Google Calendar
+
+¡Nos vemos!"""
+                
+                if calendar_link:
+                    message += f"\n\n🔗 Ver en calendario: {calendar_link}"
+                
+                await self.send_message(user.phone_number, message)
+            else:
+                await self.send_message(
+                    user.phone_number,
+                    "❌ No se pudo completar la reserva. Por favor intenta más tarde o contacta soporte."
+                )
+                
+        except Exception as e:
+            logger.error(f"Error procesando reserva AI: {e}")
+            await self.send_message(
+                user.phone_number,
+                "❌ Ocurrió un error al confirmar la reserva. Por favor intenta nuevamente."
+            )
+    
     async def confirm_reservation(self, user: User, context: Dict):
         """Confirmar y crear la reserva"""
         try:
@@ -798,17 +943,24 @@ Puedo ayudarte a:
                 )
                 return
             
-            # Realizar reserva en Playtomic
-            await self.send_message(user.phone_number, "🔄 Confirmando reserva en Playtomic...")
+            # Realizar reserva en Google Calendar
+            await self.send_message(user.phone_number, "🔄 Confirmando reserva en Google Calendar...")
             
-            playtomic = await get_playtomic_instance()
-            reservation_id = await playtomic.make_reservation(court_name, date, time)
+            google_calendar = await get_google_calendar_instance()
+            event_result = google_calendar.create_event(
+                court_name=court_name,
+                date=date,
+                time_slot=time,
+                duration_minutes=60,
+                name=user.name if user.name else None
+            )
             
-            if reservation_id:
+            if event_result and event_result.get('id'):
                 # Crear reserva en BD
                 reservation = Reservation(
                     user_id=user.id,
-                    playtomic_reservation_id=reservation_id,
+                    google_calendar_event_id=event_result.get('id'),
+                    google_calendar_link=event_result.get('htmlLink'),
                     court_name=court_name,
                     date=date_time,
                     status="confirmed",
@@ -817,21 +969,24 @@ Puedo ayudarte a:
                 self.db.add(reservation)
                 self.db.commit()
                 
-                await self.send_message(
-                    user.phone_number,
-                    f"""✅ ¡Reserva confirmada!
+                calendar_link = event_result.get('htmlLink', '')
+                message = f"""✅ ¡Reserva confirmada!
 
 🏓 Cancha: {court_name}
 📅 Fecha: {date.strftime('%d/%m/%Y')}
 ⏰ Hora: {time}
-🆔 ID: {reservation_id}
+📆 Evento creado en Google Calendar
 
 ¡Nos vemos!"""
-                )
+                
+                if calendar_link:
+                    message += f"\n\n🔗 Ver en calendario: {calendar_link}"
+                
+                await self.send_message(user.phone_number, message)
             else:
                 await self.send_message(
                     user.phone_number,
-                    "❌ No se pudo completar la reserva. Por favor intenta nuevamente o contacta soporte."
+                    "❌ No se pudo completar la reserva. Por favor intenta más tarde o contacta soporte."
                 )
                 
         except Exception as e:

@@ -48,6 +48,20 @@ TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "")  # Formato: wha
 # Configuración OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
+# Configuración Google Calendar
+GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+GOOGLE_TOKEN_FILE = os.getenv("GOOGLE_TOKEN_FILE", "token.pickle")
+GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")  # "primary" o ID de calendario específico (legacy, usar COURT_CALENDAR_MAPPING)
+
+# Mapeo de canchas a Calendar IDs de Google Calendar
+# Para obtener los IDs: ejecuta obtener_calendarios.py o ve a Google Calendar > Configuración
+COURT_CALENDAR_MAPPING = {
+    "MONEX": os.getenv("GOOGLE_CALENDAR_MONEX_ID", "primary"),  # Reemplaza con el ID real
+    "GOCSA": os.getenv("GOOGLE_CALENDAR_GOCSA_ID", "primary"),  # Reemplaza con el ID real
+    "WOODWARD": os.getenv("GOOGLE_CALENDAR_WOODWARD_ID", "primary"),  # Reemplaza con el ID real
+    "TEDS": os.getenv("GOOGLE_CALENDAR_TEDS_ID", "primary"),  # Reemplaza con el ID real
+}
+
 # Validación (comentada para desarrollo - descomentar en producción)
 # if not PLAYTOMIC_EMAIL or not PLAYTOMIC_PASSWORD:
 #     raise ValueError("PLAYTOMIC_EMAIL y PLAYTOMIC_PASSWORD deben estar configurados en .env")
