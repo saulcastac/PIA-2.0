@@ -1,33 +1,28 @@
+# Node.js
+node_modules/
+dist/
+build/
+coverage/
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
 # Virtual Environment
-.venv/*
-.env/*
+.venv/
 ENV/
+venv/
 
 # Environment variables
 .env
 .env.local
+.env.*.local
 
 # Database
 *.db
@@ -65,4 +60,13 @@ availability_cache.json
 
 # Debug de API
 api_responses_*.json
+
+# SSL Certificates
+*.pem
+*.key
+*.crt
+
+# Google Calendar credentials
+credentials.json
+token.pickle
 

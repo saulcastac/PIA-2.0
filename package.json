@@ -1,0 +1,36 @@
+{
+  "name": "padel-booking-bot",
+  "version": "2.0.0",
+  "description": "Bot de WhatsApp para reservas de canchas de padel con IA",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "padel",
+    "booking",
+    "ai",
+    "twilio",
+    "openai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "twilio": "^4.19.0",
+    "openai": "^4.20.1",
+    "googleapis": "^126.0.1",
+    "dotenv": "^16.3.1",
+    "date-fns": "^2.30.0",
+    "date-fns-tz": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+
